@@ -40,14 +40,23 @@ env:
     - HOST=x86_64-unknown-linux-gnu PACKAGES="python3" DEP_OPTS="NO_WALLET=1" RUN_TESTS=true GOAL="install" BITCOIN_CONFIG="--enable-glibc-back-compat --enable-reduce-exports"
 # Cross-Mac
     - HOST=x86_64-apple-darwin11 PACKAGES="cmake imagemagick libcap-dev librsvg2-bin libz-dev libbz2-dev libtiff-tools python-dev" BITCOIN_CONFIG="--enable-gui --enable-reduce-exports" OSX_SDK=10.11 GOAL="deploy"
-
+# static analysis 
+# temporarily removed for testing: DEP_OPTS="NO_QT=1 NO_UPNP=1 DEBUG=1" RUN_TESTS=true GOAL="install" BITCOIN_CONFIG="CPPFLAGS=-DDEBUG_LOCKORDER"
+    - STATIC_ANALYSIS=1 HOST=x86_64-unknown-linux-gnu PACKAGES="bc python3-zmq csbuild" GOAL="" CCACHE_SIZE="" CCACHE_TEMPDIR="" CCACHE_COMPRESS="" BITCOIN_CONFIG="--enable-zmq --enable-glibc-back-compat --enable-reduce-exports"
 before_install:
     - export PATH=$(echo $PATH | tr ':' "\n" | sed '/\/opt\/python/d' | tr "\n" ":" | sed "s|::|:|g")
+    - if [ "$STATIC_ANALYSIS" = 1 ]; then
+    - sudo apt-get update -qq
+    - sudo apt-get install -qq apt-transport-https
+    - echo "deb https://kdudka.fedorapeople.org/csbuild trusty contrib" | sudo tee -a /etc/apt/sources.list
+    - sudo apt-get update --qq
+    - fi
 install:
     - if [ -n "$PPA" ]; then travis_retry sudo add-apt-repository "$PPA" -y; fi
     - if [ -n "$DPKG_ADD_ARCH" ]; then sudo dpkg --add-architecture "$DPKG_ADD_ARCH" ; fi
     - if [ -n "$PACKAGES" ]; then travis_retry sudo apt-get update; fi
     - if [ -n "$PACKAGES" ]; then travis_retry sudo apt-get install --no-install-recommends --no-upgrade -qq $PACKAGES; fi
+
 before_script:
     - unset CC; unset CXX
     - if [ "$CHECK_DOC" = 1 ]; then contrib/devtools/check-doc.py; fi
@@ -60,6 +69,7 @@ script:
     - if [ -n "$USE_SHELL" ]; then export CONFIG_SHELL="$USE_SHELL"; fi
     - OUTDIR=$BASE_OUTDIR/$TRAVIS_PULL_REQUEST/$TRAVIS_JOB_NUMBER-$HOST
     - BITCOIN_CONFIG_ALL="--disable-dependency-tracking --prefix=$TRAVIS_BUILD_DIR/depends/$HOST --bindir=$OUTDIR/bin --libdir=$OUTDIR/lib --without-comparison-tool"
+    - if [ "$STATIC_ANALYSIS" != 1 ]; then
     - depends/$HOST/native/bin/ccache --max-size=$CCACHE_SIZE
     - test -n "$USE_SHELL" && eval '"$USE_SHELL" -c "./autogen.sh"' || ./autogen.sh
     - mkdir build && cd build
@@ -68,6 +78,16 @@ script:
     - cd bitcoin-$HOST
     - ./configure --cache-file=../config.cache $BITCOIN_CONFIG_ALL $BITCOIN_CONFIG || ( cat config.log && false)
     - make $MAKEJOBS $GOAL || ( echo "Build failure. Verbose build follows." && make $GOAL V=1 ; false )
+    - else
+    - CSBUILD_STDERR_LOG=`pwd`/csbuild_stderr.log
+# TODO: does csbuild need the "make distdir" stuff?
+# with "make distdir":
+#    - csbuild --git-commit-range "bitcoin..$TRAVIS_COMMIT" -c "./autogen.sh && mkdir build && cd build && ../configure $BITCOIN_CONFIG_ALL $BITCOIN_CONFIG && make distdir VERSION=$HOST && cd bitcoin-$HOST && ./configure $BITCOIN_CONFIG_ALL $BITCOIN_CONFIG && make $MAKEJOBS $GOAL" 2> $CSBUILD_STDERR_LOG
+# without "make distdir"
+    - csbuild --git-commit-range "bitcoin..$TRAVIS_COMMIT" -c "./autogen.sh && mkdir build && cd build && ../configure $BITCOIN_CONFIG_ALL $BITCOIN_CONFIG && make $MAKEJOBS $GOAL" 2> $CSBUILD_STDERR_LOG
+    - echo "printing csbuild stderr last 100 lines..."
+    - tail --lines=100 $CSBUILD_STDERR_LOG
+    - fi
     - export LD_LIBRARY_PATH=$TRAVIS_BUILD_DIR/depends/$HOST/lib
     - if [ "$RUN_TESTS" = "true" ]; then make $MAKEJOBS check VERBOSE=1; fi
     - if [ "$RUN_TESTS" = "true" ]; then qa/pull-tester/rpc-tests.py --coverage; fi
