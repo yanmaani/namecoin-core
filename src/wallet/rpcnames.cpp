@@ -601,6 +601,16 @@ name_autoregister()
 
         // TODO: Mark all inputs unspendable.
 
+        for (auto input : mtx.vin)
+            pwallet->LockCoin(input.prevout);
+
+        CTransactionRef txr = MakeTransactionRef(mtx);
+        pwallet->CommitTransaction(txr, {}, {});
+
+        pwallet->AddToWallet(txr, /* confirm */ {}, /* update_wtx */ nullptr, /* fFlushOnClose */ true);
+        // If the transaction is not added to the wallet, the inputs will continue to
+        // be considered spendable, causing us to double-spend the most preferable input if delegating.
+
         const bool queued_ok = pwallet->WriteQueuedTransaction(mtx.GetHash(), mtx);
         if (!queued_ok)
             throw JSONRPCError(RPC_WALLET_ERROR, "Error queueing transaction");
